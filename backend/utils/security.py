@@ -1,193 +1,191 @@
+"""
+Security utilities for encryption, API key management, and validation.
+Implements enterprise-grade security practices with proper encryption.
+"""
+
+import os
+import base64
+import logging
+import hashlib
+import secrets
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
 from passlib.context import CryptContext
-from jose import JWTError, jwt
-import secrets
-import hashlib
-import os
 from fastapi import HTTPException, status
-import logging
-from cryptography.fernet import Fernet
-import json
-import base64
+import re
+
+from ..config import settings
 
 logger = logging.getLogger(__name__)
 
 class SecurityManager:
     """
-    Handles authentication, authorization, and security operations
+    Handles encryption/decryption of sensitive data using Fernet symmetric encryption.
+    Implements proper key derivation and secure storage practices.
     """
     
     def __init__(self):
+        self.cipher_suite = self._initialize_cipher()
         self.pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-        self.secret_key = os.getenv("SECRET_KEY", secrets.token_urlsafe(32))
-        self.algorithm = "HS256"
-        self.access_token_expire_minutes = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
         
-        # Rate limiting storage (in production, use Redis)
-        self.rate_limit_storage: Dict[str, Dict[str, Any]] = {}
+    def _initialize_cipher(self) -> Fernet:
+        """
+        Initialize Fernet cipher with derived key from secret.
+        Uses PBKDF2 for key derivation from the secret key.
+        """
+        # Use the secret key as password for key derivation
+        password = settings.SECRET_KEY.encode()
         
-        # API key storage (in production, use database)
-        self.api_keys: Dict[str, Dict[str, Any]] = {}
+        # Salt should be stored, but for simplicity we use a fixed salt
+        # In production, use a random salt per encryption
+        salt = b'openclip_pro_salt_v1'
         
-        # Get encryption key from environment or generate one
-        encryption_key = os.environ.get('ENCRYPTION_KEY')
-        if not encryption_key:
-            # Generate a key and store it (in production, this should be persistent)
-            self.key = Fernet.generate_key()
-            logger.warning("Generated new encryption key. In production, set the ENCRYPTION_KEY environment variable.")
-        else:
-            # Use the provided key
-            self.key = encryption_key.encode()
-            
-        self.cipher_suite = Fernet(self.key)
+        # Derive a key using PBKDF2
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            iterations=100000,
+        )
+        key = base64.urlsafe_b64encode(kdf.derive(password))
         
+        return Fernet(key)
+    
+    def encrypt_value(self, plaintext: str) -> str:
+        """
+        Encrypt a string value.
+        Returns base64 encoded encrypted value.
+        """
+        try:
+            encrypted = self.cipher_suite.encrypt(plaintext.encode())
+            return base64.urlsafe_b64encode(encrypted).decode()
+        except Exception as e:
+            logger.error(f"Encryption failed: {e}")
+            raise
+    
+    def decrypt_value(self, ciphertext: str) -> str:
+        """
+        Decrypt an encrypted string value.
+        Expects base64 encoded input.
+        """
+        try:
+            decoded = base64.urlsafe_b64decode(ciphertext)
+            decrypted = self.cipher_suite.decrypt(decoded)
+            return decrypted.decode()
+        except Exception as e:
+            logger.error(f"Decryption failed: {e}")
+            raise
+    
     def hash_password(self, password: str) -> str:
-        """
-        Hash a password using bcrypt
-        """
+        """Hash a password using bcrypt"""
         return self.pwd_context.hash(password)
     
     def verify_password(self, plain_password: str, hashed_password: str) -> bool:
-        """
-        Verify a password against its hash
-        """
+        """Verify a password against its hash"""
         return self.pwd_context.verify(plain_password, hashed_password)
     
-    def create_access_token(self, data: Dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:
+    def hash_api_key(self, api_key: str) -> str:
         """
-        Create a JWT access token
+        Create a one-way hash of an API key for storage.
+        Uses SHA256 for consistent hashing.
         """
-        to_encode = data.copy()
-        if expires_delta:
-            expire = datetime.utcnow() + expires_delta
-        else:
-            expire = datetime.utcnow() + timedelta(minutes=self.access_token_expire_minutes)
-        
-        to_encode.update({"exp": expire})
-        encoded_jwt = jwt.encode(to_encode, self.secret_key, algorithm=self.algorithm)
-        return encoded_jwt
+        return hashlib.sha256(api_key.encode()).hexdigest()
     
-    def verify_token(self, token: str) -> Dict[str, Any]:
+    def get_api_key_prefix(self, api_key: str) -> str:
+        """Get the first 8 characters of an API key for identification."""
+        return api_key[:8] if len(api_key) >= 8 else api_key
+    
+    def generate_api_key(self) -> str:
         """
-        Verify and decode a JWT token
+        Generate a new secure API key.
+        Format: ocpro_[32 random characters]
+        """
+        return f"ocpro_{secrets.token_urlsafe(32)}"
+    
+    def generate_share_token(self) -> str:
+        """Generate a secure share token for projects."""
+        return secrets.token_urlsafe(16)
+    
+    def verify_api_key(self, provided_key: str, stored_hash: str) -> bool:
+        """Verify an API key against its stored hash."""
+        return self.hash_api_key(provided_key) == stored_hash
+    
+    def get_api_key(self, provider: str, db_session, settings_repo) -> Optional[str]:
+        """
+        Get and decrypt an API key for a provider.
+        Compatible with the existing codebase interface.
         """
         try:
-            payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
-            return payload
-        except JWTError as e:
-            logger.warning(f"Token verification failed: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Could not validate credentials",
-                headers={"WWW-Authenticate": "Bearer"},
+            # Get the setting from database
+            setting = settings_repo.get_setting(db_session, "api_keys", f"{provider}_key")
+            if not setting or not setting.value:
+                return None
+            
+            # Check if it's encrypted
+            if setting.is_encrypted:
+                return self.decrypt_value(setting.value)
+            else:
+                # Legacy support - encrypt on read
+                encrypted = self.encrypt_value(setting.value)
+                settings_repo.create_or_update_setting(
+                    db_session,
+                    "api_keys",
+                    f"{provider}_key",
+                    encrypted
+                )
+                # Update the is_encrypted flag
+                setting.is_encrypted = True
+                db_session.commit()
+                return setting.value
+                
+        except Exception as e:
+            logger.error(f"Failed to get API key for {provider}: {e}")
+            return None
+    
+    def store_api_key(self, provider: str, api_key: str, db_session, settings_repo) -> bool:
+        """
+        Encrypt and store an API key.
+        Compatible with the existing codebase interface.
+        """
+        try:
+            # Encrypt the API key
+            encrypted_key = self.encrypt_value(api_key)
+            
+            # Store in database with encryption flag
+            setting = settings_repo.create_or_update_setting(
+                db_session,
+                "api_keys",
+                f"{provider}_key",
+                encrypted_key
             )
-    
-    def generate_api_key(self, user_id: str, name: str = "Default") -> str:
-        """
-        Generate a new API key for a user
-        """
-        api_key = f"ocp_{secrets.token_urlsafe(32)}"
-        
-        self.api_keys[api_key] = {
-            "user_id": user_id,
-            "name": name,
-            "created_at": datetime.utcnow(),
-            "last_used": None,
-            "is_active": True,
-            "usage_count": 0
-        }
-        
-        logger.info(f"Generated API key for user {user_id}")
-        return api_key
-    
-    def verify_api_key(self, api_key: str) -> Optional[Dict[str, Any]]:
-        """
-        Verify an API key and return user info
-        """
-        if api_key not in self.api_keys:
-            return None
-        
-        key_info = self.api_keys[api_key]
-        if not key_info["is_active"]:
-            return None
-        
-        # Update usage statistics
-        key_info["last_used"] = datetime.utcnow()
-        key_info["usage_count"] += 1
-        
-        return key_info
-    
-    def revoke_api_key(self, api_key: str) -> bool:
-        """
-        Revoke an API key
-        """
-        if api_key in self.api_keys:
-            self.api_keys[api_key]["is_active"] = False
-            logger.info(f"Revoked API key: {api_key[:10]}...")
+            setting.is_encrypted = True
+            db_session.commit()
+            
             return True
-        return False
-    
-    def check_rate_limit(self, identifier: str, limit: int = 100, window_minutes: int = 60) -> bool:
-        """
-        Check if a request is within rate limits
-        """
-        now = datetime.utcnow()
-        window_start = now - timedelta(minutes=window_minutes)
-        
-        if identifier not in self.rate_limit_storage:
-            self.rate_limit_storage[identifier] = {
-                "requests": [],
-                "blocked_until": None
-            }
-        
-        user_data = self.rate_limit_storage[identifier]
-        
-        # Check if user is currently blocked
-        if user_data["blocked_until"] and now < user_data["blocked_until"]:
+        except Exception as e:
+            logger.error(f"Failed to store API key for {provider}: {e}")
             return False
-        
-        # Clean old requests
-        user_data["requests"] = [
-            req_time for req_time in user_data["requests"]
-            if req_time > window_start
-        ]
-        
-        # Check rate limit
-        if len(user_data["requests"]) >= limit:
-            # Block user for the remaining window time
-            user_data["blocked_until"] = now + timedelta(minutes=window_minutes)
-            logger.warning(f"Rate limit exceeded for {identifier}")
-            return False
-        
-        # Add current request
-        user_data["requests"].append(now)
-        return True
     
     def sanitize_filename(self, filename: str) -> str:
-        """
-        Sanitize a filename to prevent directory traversal attacks
-        """
+        """Sanitize a filename to prevent directory traversal attacks"""
         # Remove any path separators and dangerous characters
-        import re
         sanitized = re.sub(r'[<>:"/\\|?*]', '_', filename)
         sanitized = sanitized.replace('..', '_')
         return sanitized[:255]  # Limit length
     
     def validate_file_type(self, filename: str, allowed_extensions: list) -> bool:
-        """
-        Validate file type based on extension
-        """
+        """Validate file type based on extension"""
         if not filename:
             return False
         
-        extension = filename.lower().split('.')[-1]
-        return extension in [ext.lower() for ext in allowed_extensions]
+        extension = filename.lower().split('.')[-1] if '.' in filename else ''
+        return f".{extension}" in [ext.lower() for ext in allowed_extensions]
     
     def generate_secure_filename(self, original_filename: str) -> str:
-        """
-        Generate a secure filename with timestamp and hash
-        """
+        """Generate a secure filename with timestamp and hash"""
         timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         file_hash = hashlib.md5(original_filename.encode()).hexdigest()[:8]
         
@@ -199,9 +197,7 @@ class SecurityManager:
             return f"{timestamp}_{file_hash}"
     
     def validate_request_size(self, content_length: Optional[int], max_size_mb: int = 100) -> bool:
-        """
-        Validate request content size
-        """
+        """Validate request content size"""
         if content_length is None:
             return True  # Let it through, will be caught later if too large
         
@@ -209,9 +205,7 @@ class SecurityManager:
         return content_length <= max_size_bytes
     
     def log_security_event(self, event_type: str, details: Dict[str, Any], severity: str = "INFO"):
-        """
-        Log security-related events
-        """
+        """Log security-related events"""
         log_entry = {
             "timestamp": datetime.utcnow().isoformat(),
             "event_type": event_type,
@@ -226,72 +220,47 @@ class SecurityManager:
         else:
             logger.info(f"Security Event: {event_type} - {details}")
     
-    def encrypt_api_key(self, api_key: str) -> str:
-        """Simple encoding of an API key (not secure, just for demo)"""
-        if not api_key:
-            return ""
-            
-        try:
-            # Simple base64 encoding (NOT secure for production)
-            encoded = base64.b64encode(api_key.encode()).decode()
-            return encoded
-        except Exception as e:
-            logger.error(f"Error encoding API key: {e}")
-            # Return the key as-is if encoding fails
-            return api_key
+    def validate_password_strength(self, password: str) -> tuple[bool, Optional[str]]:
+        """
+        Validate password against security requirements.
+        Returns (is_valid, error_message)
+        """
+        if len(password) < settings.PASSWORD_MIN_LENGTH:
+            return False, f"Password must be at least {settings.PASSWORD_MIN_LENGTH} characters long"
+        
+        if settings.PASSWORD_REQUIRE_UPPERCASE and not re.search(r'[A-Z]', password):
+            return False, "Password must contain at least one uppercase letter"
+        
+        if settings.PASSWORD_REQUIRE_LOWERCASE and not re.search(r'[a-z]', password):
+            return False, "Password must contain at least one lowercase letter"
+        
+        if settings.PASSWORD_REQUIRE_NUMBERS and not re.search(r'\d', password):
+            return False, "Password must contain at least one number"
+        
+        if settings.PASSWORD_REQUIRE_SPECIAL and not re.search(r'[!@#$%^&*(),.?":{}|<>]', password):
+            return False, "Password must contain at least one special character"
+        
+        return True, None
     
-    def decrypt_api_key(self, encoded_key: str) -> str:
-        """Simple decoding of an API key (not secure, just for demo)"""
-        if not encoded_key:
-            return ""
-            
-        try:
-            # Check if it's already in plain text
-            if not self._is_base64(encoded_key):
-                return encoded_key
-                
-            # Simple base64 decoding (NOT secure for production)
-            decoded = base64.b64decode(encoded_key.encode()).decode()
-            return decoded
-        except Exception as e:
-            logger.error(f"Error decoding API key: {e}")
-            return ""
+    def generate_2fa_secret(self) -> str:
+        """Generate a secret for 2FA (TOTP)"""
+        import pyotp
+        return pyotp.random_base32()
     
-    def _is_base64(self, s: str) -> bool:
-        """Check if a string is base64 encoded"""
-        try:
-            return base64.b64encode(base64.b64decode(s.encode())).decode() == s
-        except Exception:
-            return False
+    def verify_2fa_token(self, secret: str, token: str) -> bool:
+        """Verify a 2FA TOTP token"""
+        import pyotp
+        totp = pyotp.TOTP(secret)
+        return totp.verify(token, valid_window=1)
     
-    def store_api_key(self, provider: str, api_key: str, db_session, settings_repo) -> bool:
-        """Store an API key securely in the database"""
-        try:
-            encoded_key = self.encrypt_api_key(api_key)
-            settings_repo.create_or_update_setting(
-                db_session, 
-                "api_keys",
-                provider,
-                encoded_key
-            )
-            return True
-        except Exception as e:
-            logger.error(f"Error storing API key: {e}")
-            return False
-    
-    def get_api_key(self, provider: str, db_session, settings_repo) -> Optional[str]:
-        """Get a decrypted API key from the database"""
-        try:
-            setting = settings_repo.get_setting(db_session, "api_keys", provider)
-            if not setting or not setting.value:
-                return None
-                
-            return self.decrypt_api_key(setting.value)
-        except Exception as e:
-            logger.error(f"Error retrieving API key: {e}")
-            return None
-    
-    def validate_token(self, token: str) -> bool:
-        """Validate an authentication token (placeholder for future auth)"""
-        # In a real implementation, this would validate JWT tokens or similar
-        return True
+    def get_2fa_provisioning_uri(self, secret: str, email: str) -> str:
+        """Get the provisioning URI for 2FA setup"""
+        import pyotp
+        totp = pyotp.TOTP(secret)
+        return totp.provisioning_uri(
+            name=email,
+            issuer_name=settings.APP_NAME
+        )
+
+# Singleton instance
+security_manager = SecurityManager()

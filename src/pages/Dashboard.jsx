@@ -32,14 +32,14 @@ const Dashboard = () => {
   const [timeGreeting, setTimeGreeting] = useState('')
   const [motivationalQuote, setMotivationalQuote] = useState('')
   
-  // Set time-based greeting
+  // Set time-based greeting with glass-enhanced experience
   useEffect(() => {
     const hour = new Date().getHours()
     if (hour < 12) setTimeGreeting('Good morning')
     else if (hour < 18) setTimeGreeting('Good afternoon')
     else setTimeGreeting('Good evening')
     
-    // Random motivational quotes based on personality mood
+    // Motivational quotes optimized for glass interface
     const quotes = {
       friendly: [
         "Let's create something amazing together!",
@@ -80,15 +80,6 @@ const Dashboard = () => {
     navigate(`/project/${projectId}`)
   }
   
-  // Adaptive layout based on user patterns
-  const getLayoutPriority = () => {
-    if (uiState.activityLevel === 'intense') return 'compact'
-    if (personality.mood === 'focused') return 'minimal'
-    return 'standard'
-  }
-  
-  const layoutPriority = getLayoutPriority()
-  
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -100,8 +91,8 @@ const Dashboard = () => {
           >
             <Brain className="w-full h-full text-blue-500" />
           </motion.div>
-          <p className="text-gray-600 dark:text-gray-400">
-            {personality.name} is preparing your workspace...
+          <p className="text-white/60">
+            Preparing your workspace...
           </p>
         </div>
       </div>
@@ -110,32 +101,32 @@ const Dashboard = () => {
 
   return (
     <div className="space-y-6">
-      {/* Personalized Header */}
+      {/* Enhanced Hero Section with Glass Physics */}
       <motion.div
         initial={{ opacity: 0, y: -20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5 }}
-        className="relative overflow-hidden bg-gradient-to-r from-blue-600 to-purple-600 rounded-2xl p-8 text-white"
+        className="relative overflow-hidden comprehensive-glass rounded-2xl p-8 text-white"
       >
-        {/* Animated background pattern */}
-        <div className="absolute inset-0 opacity-20">
-          <motion.div
-            className="absolute inset-0"
-            style={{
-              backgroundImage: `radial-gradient(circle at 20% 50%, rgba(255,255,255,0.3) 0%, transparent 50%)`,
-            }}
-            animate={{
-              x: [0, 100, 0],
-            }}
-            transition={{
-              duration: 20,
-              repeat: Infinity,
-              ease: 'linear',
-            }}
-          />
-        </div>
-        
         <div className="relative z-10">
+          {/* Animated background pattern with glass integration */}
+          <div className="absolute inset-0 opacity-20 pointer-events-none">
+            <motion.div
+              className="absolute inset-0"
+              style={{
+                backgroundImage: `radial-gradient(circle at 20% 50%, rgba(255,255,255,0.3) 0%, transparent 50%)`,
+              }}
+              animate={{
+                x: [0, 100, 0],
+              }}
+              transition={{
+                duration: 20,
+                repeat: Infinity,
+                ease: 'linear',
+              }}
+            />
+          </div>
+          
           <motion.h1 
             className="text-3xl font-bold mb-2"
             animate={{
@@ -150,30 +141,30 @@ const Dashboard = () => {
           </motion.h1>
           <p className="text-lg opacity-90 mb-6">{motivationalQuote}</p>
           
-          {/* Quick stats in header */}
+          {/* Enhanced quick stats in header with glass treatment */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="bg-white/10 backdrop-blur-sm rounded-lg p-3">
+            <div className="comprehensive-glass glass-button rounded-lg p-3">
               <div className="flex items-center gap-2 mb-1">
                 <Video className="w-4 h-4" />
                 <span className="text-sm opacity-80">Projects</span>
               </div>
               <p className="text-2xl font-bold">{stats.totalProjects}</p>
             </div>
-            <div className="bg-white/10 backdrop-blur-sm rounded-lg p-3">
+            <div className="comprehensive-glass glass-button rounded-lg p-3">
               <div className="flex items-center gap-2 mb-1">
                 <Play className="w-4 h-4" />
                 <span className="text-sm opacity-80">Total Clips</span>
               </div>
               <p className="text-2xl font-bold">{stats.totalClips}</p>
             </div>
-            <div className="bg-white/10 backdrop-blur-sm rounded-lg p-3">
+            <div className="comprehensive-glass glass-button rounded-lg p-3">
               <div className="flex items-center gap-2 mb-1">
                 <TrendingUp className="w-4 h-4" />
                 <span className="text-sm opacity-80">Avg Score</span>
               </div>
               <p className="text-2xl font-bold">{stats.averageScore.toFixed(1)}</p>
             </div>
-            <div className="bg-white/10 backdrop-blur-sm rounded-lg p-3">
+            <div className="comprehensive-glass glass-button rounded-lg p-3">
               <div className="flex items-center gap-2 mb-1">
                 <Zap className="w-4 h-4" />
                 <span className="text-sm opacity-80">Productivity</span>
@@ -187,142 +178,146 @@ const Dashboard = () => {
         </div>
       </motion.div>
       
-      {/* Adaptive Quick Actions */}
+      {/* Enhanced Adaptive Quick Actions with Glass */}
       <AnimatePresence>
         {predictions.nextAction && (
           <motion.div
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: 'auto' }}
             exit={{ opacity: 0, height: 0 }}
-            className="bg-gradient-to-r from-purple-100 to-blue-100 dark:from-purple-900/20 dark:to-blue-900/20 rounded-lg p-4"
+            className="comprehensive-glass glass-button rounded-lg p-4"
           >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <Target className="w-5 h-5 text-purple-600 dark:text-purple-400" />
-                <div>
-                  <p className="text-sm font-medium text-gray-900 dark:text-white">
-                    Predicted Next Action
-                  </p>
-                  <p className="text-xs text-gray-600 dark:text-gray-400">
-                    {predictions.nextAction.suggestion}
-                  </p>
+            <div className="relative z-10">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <Target className="w-5 h-5 text-purple-400" />
+                  <div>
+                    <p className="text-sm font-medium text-white">
+                      Predicted Next Action
+                    </p>
+                    <p className="text-xs text-white/60">
+                      {predictions.nextAction.suggestion}
+                    </p>
+                  </div>
                 </div>
+                <motion.button
+                  onClick={() => {
+                    if (predictions.nextAction.action === 'upload') {
+                      navigate('/projects?create=true')
+                    } else if (predictions.nextAction.action === 'export') {
+                      navigate('/clips')
+                    }
+                  }}
+                  className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors flex items-center gap-2 comprehensive-glass glass-button"
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                >
+                  <span>Go</span>
+                  <ChevronRight className="w-4 h-4" />
+                </motion.button>
               </div>
-              <button
-                onClick={() => {
-                  if (predictions.nextAction.action === 'upload') {
-                    navigate('/projects?create=true')
-                  } else if (predictions.nextAction.action === 'export') {
-                    navigate('/clips')
-                  }
-                }}
-                className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors flex items-center gap-2"
-              >
-                <span>Go</span>
-                <ChevronRight className="w-4 h-4" />
-              </button>
             </div>
           </motion.div>
         )}
       </AnimatePresence>
       
-      {/* Main Content Grid */}
-      <div className={`grid ${
-        layoutPriority === 'compact' 
-          ? 'grid-cols-1 lg:grid-cols-3 gap-4' 
-          : 'grid-cols-1 lg:grid-cols-2 gap-6'
-      }`}>
-        {/* Quick Actions - Adaptive positioning */}
-        <motion.div 
-          className={`${layoutPriority === 'compact' ? 'lg:col-span-1' : 'lg:col-span-2'}`}
-          layout
-        >
-          <QuickActions />
-        </motion.div>
-        
-        {/* Recent Projects */}
-        <motion.div 
-          className={`${layoutPriority === 'compact' ? 'lg:col-span-2' : 'lg:col-span-1'}`}
-          layout
-        >
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
-                Recent Projects
-              </h2>
-              <button
-                onClick={() => navigate('/projects')}
-                className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
-              >
-                View all
-              </button>
+      {/* Enhanced Main Content Grid with Glass */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Enhanced Quick Actions with Glass Treatment */}
+        <motion.div className="lg:col-span-2" layout>
+          <div className="comprehensive-glass rounded-lg p-6">
+            <div className="relative z-10">
+              <QuickActions />
             </div>
-            
-            {projects.length === 0 ? (
-              <div className="text-center py-8">
-                <Video className="w-12 h-12 text-gray-400 mx-auto mb-3" />
-                <p className="text-gray-600 dark:text-gray-400 mb-4">
-                  No projects yet. Start by creating one!
-                </p>
-                <button
-                  onClick={handleCreateProject}
-                  className="btn btn-primary"
-                >
-                  <Plus className="w-4 h-4 mr-2" />
-                  Create Project
-                </button>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {projects.slice(0, 5).map((project) => (
-                  <motion.div
-                    key={project.id}
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
-                    onClick={() => handleProjectClick(project.id)}
-                    className="p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 transition-all living-hover"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex-1">
-                        <h3 className="font-medium text-gray-900 dark:text-white">
-                          {project.name}
-                        </h3>
-                        <div className="flex items-center gap-4 mt-1 text-sm text-gray-600 dark:text-gray-400">
-                          <span>{project.clips?.length || 0} clips</span>
-                          <span>•</span>
-                          <span>{new Date(project.created_at || project.createdAt).toLocaleDateString()}</span>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {project.status === 'analyzing' && (
-                          <div className="flex items-center gap-2 text-blue-600 dark:text-blue-400">
-                            <motion.div
-                              animate={{ rotate: 360 }}
-                              transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
-                            >
-                              <Brain className="w-4 h-4" />
-                            </motion.div>
-                            <span className="text-sm">Analyzing</span>
-                          </div>
-                        )}
-                        <ChevronRight className="w-5 h-5 text-gray-400" />
-                      </div>
-                    </div>
-                  </motion.div>
-                ))}
-              </div>
-            )}
           </div>
         </motion.div>
         
-        {/* Activity & AI Insights */}
-        <motion.div 
-          className={`${layoutPriority === 'compact' ? 'lg:col-span-3' : 'lg:col-span-1'}`}
-          layout
-        >
-          <RecentActivity />
+        {/* Enhanced Recent Projects with Glass */}
+        <motion.div className="lg:col-span-1" layout>
+          <div className="comprehensive-glass rounded-lg p-6">
+            <div className="relative z-10">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-semibold text-white">
+                  Recent Projects
+                </h2>
+                <button
+                  onClick={() => navigate('/projects')}
+                  className="text-sm text-blue-400 hover:underline"
+                >
+                  View all
+                </button>
+              </div>
+              
+              {projects.length === 0 ? (
+                <div className="text-center py-8">
+                  <Video className="w-12 h-12 text-white/40 mx-auto mb-3" />
+                  <p className="text-white/60 mb-4">
+                    No projects yet. Start by creating one!
+                  </p>
+                  <motion.button
+                    onClick={handleCreateProject}
+                    className="comprehensive-glass glass-button px-4 py-2 rounded-lg text-white hover:bg-white/20 transition-colors flex items-center gap-2 mx-auto"
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                  >
+                    <Plus className="w-4 h-4" />
+                    Create Project
+                  </motion.button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {projects.slice(0, 5).map((project) => (
+                    <motion.div
+                      key={project.id}
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={() => handleProjectClick(project.id)}
+                      className="p-4 comprehensive-glass glass-button rounded-lg cursor-pointer hover:bg-white/15 transition-all"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex-1">
+                          <h3 className="font-medium text-white">
+                            {project.name}
+                          </h3>
+                          <div className="flex items-center gap-4 mt-1 text-sm text-white/60">
+                            <span>{project.clips?.length || 0} clips</span>
+                            <span>•</span>
+                            <span>{new Date(project.created_at || project.createdAt).toLocaleDateString()}</span>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {project.status === 'analyzing' && (
+                            <div className="flex items-center gap-2 text-blue-400">
+                              <motion.div
+                                animate={{ rotate: 360 }}
+                                transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
+                              >
+                                <Brain className="w-4 h-4" />
+                              </motion.div>
+                              <span className="text-sm">Analyzing</span>
+                            </div>
+                          )}
+                          <ChevronRight className="w-5 h-5 text-white/40" />
+                        </div>
+                      </div>
+                    </motion.div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
         </motion.div>
       </div>
+      
+      {/* Enhanced Activity & AI Insights with Glass */}
+      <motion.div layout>
+        <div className="comprehensive-glass rounded-lg p-6">
+          <div className="relative z-10">
+            <h2 className="text-lg font-semibold text-white mb-4">Recent Activity & AI Insights</h2>
+            <RecentActivity />
+          </div>
+        </div>
+      </motion.div>
     </div>
   )
 }

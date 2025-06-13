@@ -1,305 +1,310 @@
 # OpenClip Pro Backend
 
-FastAPI-based backend service for OpenClip Pro - AI-powered video clipping application.
+🔐 **Enterprise-grade backend for AI-powered video analysis** with comprehensive authentication, security, and scalability features.
 
-## Features
+## 🏗️ Architecture Overview
 
-- **Video Processing**: Upload and process video files with FFmpeg
-- **AI Analysis**: Integration with OpenAI, Google Gemini, and LM Studio
-- **YouTube Support**: Download and process YouTube videos
-- **Clip Generation**: AI-powered automatic clip creation
-- **File Management**: Secure file upload, storage, and management
-- **API Security**: Authentication, encryption, and rate limiting
-- **Export Options**: Multiple video export formats and qualities
+The backend is built with **FastAPI** and implements:
 
-## Prerequisites
+- **JWT-based Authentication** with refresh token rotation
+- **Role-based Access Control** (RBAC)
+- **Encrypted API Key Storage** for third-party services
+- **Rate Limiting** per user/endpoint
+- **Audit Logging** for security compliance
+- **Multi-tenant Support** with teams
+- **Storage Quotas** and usage tracking
+- **Secure File Handling** with validation
 
-- Python 3.8 or higher
+## 🚀 Quick Start
+
+### Prerequisites
+
+- Python 3.8+
+- Redis (for session management)
 - FFmpeg (for video processing)
-- FFprobe (usually comes with FFmpeg)
+- PostgreSQL (recommended for production)
 
-### Installing FFmpeg
+### Installation
 
-**Windows:**
-1. Download FFmpeg from https://ffmpeg.org/download.html
-2. Extract to a folder (e.g., `C:\ffmpeg`)
-3. Add `C:\ffmpeg\bin` to your system PATH
-
-**macOS:**
-```bash
-brew install ffmpeg
-```
-
-**Linux (Ubuntu/Debian):**
-```bash
-sudo apt update
-sudo apt install ffmpeg
-```
-
-## Installation
-
-1. **Clone the repository:**
+1. **Clone and setup environment**
    ```bash
-   git clone <repository-url>
-   cd openclip-pro/backend
-   ```
-
-2. **Create virtual environment:**
-   ```bash
+   cd backend
    python -m venv venv
    
    # Windows
    venv\Scripts\activate
-   
    # macOS/Linux
    source venv/bin/activate
-   ```
-
-3. **Install dependencies:**
-   ```bash
+   
    pip install -r requirements.txt
    ```
 
-4. **Create environment file:**
+2. **Configure environment**
    ```bash
    cp .env.example .env
-   ```
-   
-   Edit `.env` with your configuration:
-   ```env
-   # API Keys (optional - can be set via UI)
-   OPENAI_API_KEY=your_openai_key_here
-   GEMINI_API_KEY=your_gemini_key_here
-   
-   # Server Configuration
-   HOST=0.0.0.0
-   PORT=8000
-   DEBUG=True
-   
-   # File Upload
-   MAX_FILE_SIZE=500000000  # 500MB in bytes
-   UPLOAD_DIR=uploads
-   
-   # Security
-   SECRET_KEY=your_secret_key_here
-   SESSION_TIMEOUT=86400  # 24 hours in seconds
+   # Edit .env with your configuration
    ```
 
-## Running the Server
+3. **Initialize database**
+   ```bash
+   # Run migrations
+   alembic upgrade head
+   
+   # Or use the simple init (development)
+   python -c "from utils.db_manager import init_db; init_db()"
+   ```
 
-### Development Mode
+4. **Start the server**
+   ```bash
+   uvicorn main:app --reload --port 8000
+   ```
+
+5. **Access the application**
+   - API: http://localhost:8000
+   - API Docs: http://localhost:8000/api/docs
+   - Health Check: http://localhost:8000/health
+
+## 🔑 Authentication Flow
+
+### Registration
 ```bash
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+POST /api/auth/register
+{
+  "email": "user@example.com",
+  "password": "SecurePass123!",
+  "full_name": "John Doe"
+}
 ```
 
-### Production Mode
+### Login
 ```bash
-uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
+POST /api/auth/login
+{
+  "username": "user@example.com",  # OAuth2 spec uses 'username'
+  "password": "SecurePass123!"
+}
 ```
 
-The API will be available at:
-- **API Base URL**: http://localhost:8000
-- **Interactive Docs**: http://localhost:8000/docs
-- **ReDoc**: http://localhost:8000/redoc
+Returns:
+```json
+{
+  "access_token": "eyJ...",
+  "token_type": "bearer",
+  "expires_in": 1800,
+  "user": {
+    "id": "uuid",
+    "email": "user@example.com",
+    "roles": ["user"]
+  }
+}
+```
 
-## API Endpoints
+### Using Protected Endpoints
+```bash
+GET /api/projects
+Authorization: Bearer <access_token>
+```
 
-### Projects
-- `GET /api/projects` - List all projects
-- `POST /api/projects` - Create new project
-- `GET /api/projects/{project_id}` - Get project details
-- `DELETE /api/projects/{project_id}` - Delete project
+### Token Refresh
+```bash
+POST /api/auth/refresh
+Cookie: refresh_token=<token>
+```
 
-### Video Upload & Processing
-- `POST /api/upload` - Upload video file
-- `POST /api/youtube` - Process YouTube URL
-- `POST /api/analyze` - Start AI analysis
-- `GET /api/analysis/{project_id}/status` - Get analysis status
+## 🛡️ Security Features
 
-### Clips
-- `GET /api/projects/{project_id}/clips` - Get project clips
-- `PUT /api/clips/{clip_id}` - Update clip
-- `DELETE /api/clips/{clip_id}` - Delete clip
-- `POST /api/clips/{clip_id}/export` - Export clip
+### Password Requirements
+- Minimum 8 characters
+- At least one uppercase letter
+- At least one lowercase letter
+- At least one number
+- At least one special character
 
-### Settings & Configuration
+### Rate Limiting
+- Authentication: 10 attempts/hour
+- API calls: 100 requests/hour (configurable)
+- File uploads: 50/day
+
+### Account Security
+- Email verification required
+- Account lockout after 5 failed attempts
+- Optional 2FA support
+- Secure password reset flow
+
+## 📊 API Endpoints
+
+### Public Endpoints
+- `GET /health` - Health check
+- `POST /api/auth/register` - User registration
+- `POST /api/auth/login` - User login
+- `POST /api/auth/verify-email/{token}` - Email verification
+- `POST /api/auth/request-password-reset` - Password reset request
+
+### Protected Endpoints (require authentication)
+- `GET /api/auth/me` - Get current user
+- `GET /api/projects` - List user's projects
+- `POST /api/projects` - Create project
+- `POST /api/projects/{id}/upload` - Upload video
+- `POST /api/projects/{id}/analyze` - Start AI analysis
 - `GET /api/settings` - Get user settings
-- `PUT /api/settings` - Update settings
-- `POST /api/settings/test-api` - Test API connection
-- `GET /api/settings/models` - Get available models
+- `POST /api/settings/api-key` - Store encrypted API key
 
-### File Management
-- `GET /api/files/{file_id}` - Get file info
-- `DELETE /api/files/{file_id}` - Delete file
-- `GET /api/files/stats` - Get storage statistics
+### Admin Endpoints (require admin role)
+- `GET /api/auth/users` - List all users
+- `PUT /api/auth/users/{id}/roles` - Update user roles
+- `GET /api/admin/stats` - System statistics
 
-## AI Provider Setup
-
-### OpenAI
-1. Get API key from https://platform.openai.com/api-keys
-2. Set in environment or via settings API
-3. Supported models: GPT-4, GPT-4 Turbo, GPT-3.5 Turbo
-
-### Google Gemini
-1. Get API key from https://makersuite.google.com/app/apikey
-2. Set in environment or via settings API
-3. Supported models: Gemini Pro, Gemini Pro Vision, Gemini 1.5 Pro
-
-### LM Studio (Local)
-1. Download and install LM Studio
-2. Load a compatible model
-3. Start the local server (usually on port 1234)
-4. No API key required
-
-## File Structure
-
-```
-backend/
-├── main.py                 # FastAPI application entry point
-├── requirements.txt        # Python dependencies
-├── .env.example           # Environment variables template
-├── models/
-│   └── project.py         # Pydantic data models
-├── services/
-│   ├── video_processor.py # Video processing service
-│   ├── ai_analyzer.py     # AI analysis service
-│   ├── api_manager.py     # API provider management
-│   ├── security.py        # Security and encryption
-│   └── file_manager.py    # File operations
-└── uploads/               # File storage directory
-    ├── videos/
-    ├── audio/
-    ├── images/
-    ├── exports/
-    └── thumbnails/
-```
-
-## Configuration
+## 🔧 Configuration
 
 ### Environment Variables
 
-| Variable | Description | Default |
-|----------|-------------|----------|
-| `HOST` | Server host | `0.0.0.0` |
-| `PORT` | Server port | `8000` |
-| `DEBUG` | Debug mode | `False` |
-| `MAX_FILE_SIZE` | Max upload size (bytes) | `500000000` |
-| `UPLOAD_DIR` | Upload directory | `uploads` |
-| `SECRET_KEY` | Security secret | Required |
-| `SESSION_TIMEOUT` | Session timeout (seconds) | `86400` |
-| `OPENAI_API_KEY` | OpenAI API key | Optional |
-| `GEMINI_API_KEY` | Gemini API key | Optional |
+Key variables in `.env`:
 
-### File Upload Limits
+```env
+# Security (MUST change in production)
+SECRET_KEY="your-secret-key-here"
 
-- **Maximum file size**: 500MB (configurable)
-- **Supported video formats**: MP4, AVI, MOV, MKV, WMV, FLV, WebM, M4V
-- **Supported audio formats**: MP3, WAV, AAC, FLAC, OGG, M4A
-- **Supported image formats**: JPG, PNG, GIF, BMP, TIFF, WebP
+# Database
+DATABASE_URL="postgresql://user:pass@localhost/openclip"
 
-## Security Features
+# Redis
+REDIS_HOST="localhost"
+REDIS_PORT=6379
 
-- **API Key Encryption**: Sensitive data encrypted at rest
-- **Session Management**: Secure session handling with timeouts
-- **Rate Limiting**: Protection against API abuse
-- **Input Validation**: Comprehensive input sanitization
-- **File Validation**: Secure file upload with type checking
-- **CORS Protection**: Configurable cross-origin policies
+# Email (for verification)
+SMTP_HOST="smtp.gmail.com"
+SMTP_USERNAME="your-email@gmail.com"
+SMTP_PASSWORD="app-specific-password"
+```
 
-## Development
+### Default Admin User
 
-### Running Tests
+In development, a default admin is created:
+- Email: admin@openclippro.com
+- Password: admin123!
+
+**⚠️ Change immediately in production!**
+
+## 📁 Project Structure
+
+```
+backend/
+├── auth/                  # Authentication system
+│   ├── auth_handler.py   # JWT & token management
+│   └── auth_routes.py    # Auth endpoints
+├── models/               # Database models
+│   ├── database.py       # SQLAlchemy models
+│   └── repositories.py   # Data access layer
+├── services/             # Business logic
+│   ├── ai_analyzer.py    # AI integration
+│   └── video_processor.py # Video processing
+├── utils/                # Utilities
+│   ├── security.py       # Encryption & security
+│   ├── email_service.py  # Email sending
+│   └── file_manager.py   # File operations
+├── alembic/              # Database migrations
+├── main.py               # FastAPI application
+├── config.py             # Configuration
+└── requirements.txt      # Dependencies
+```
+
+## 🧪 Testing
+
+Run tests with pytest:
 ```bash
+# Run all tests
 pytest
+
+# With coverage
+pytest --cov=. --cov-report=html
+
+# Specific test file
+pytest tests/test_auth.py -v
 ```
 
-### Code Formatting
-```bash
-black .
-isort .
-flake8 .
+## 🚢 Production Deployment
+
+### Using Docker
+
+```dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+EXPOSE 8000
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 ```
 
-### Adding New AI Providers
+### Environment Setup
 
-1. Update `ai_analyzer.py` with new provider logic
-2. Add provider configuration to `api_manager.py`
-3. Update models in `project.py` if needed
-4. Add tests for the new provider
+1. Use PostgreSQL instead of SQLite
+2. Set up Redis with password
+3. Configure proper SMTP server
+4. Use reverse proxy (Nginx) with HTTPS
+5. Set `ENVIRONMENT=production`
+6. Disable debug endpoints
 
-## Troubleshooting
+### Security Checklist
+
+- [ ] Change all default passwords
+- [ ] Set strong SECRET_KEY
+- [ ] Enable HTTPS only
+- [ ] Configure firewall rules
+- [ ] Set up monitoring (Sentry)
+- [ ] Enable audit logging
+- [ ] Regular security updates
+- [ ] Backup strategy
+
+## 🐛 Troubleshooting
 
 ### Common Issues
 
-**FFmpeg not found:**
-- Ensure FFmpeg is installed and in PATH
-- Test with: `ffmpeg -version`
+1. **"No module named 'module_name'"**
+   - Ensure virtual environment is activated
+   - Run `pip install -r requirements.txt`
 
-**Large file uploads failing:**
-- Check `MAX_FILE_SIZE` setting
-- Ensure sufficient disk space
-- Check server timeout settings
+2. **"Connection refused" on startup**
+   - Check Redis is running: `redis-cli ping`
+   - Verify DATABASE_URL is correct
 
-**AI API errors:**
-- Verify API keys are correct
-- Check rate limits and quotas
-- Test connection with `/api/settings/test-api`
+3. **Email not sending**
+   - Check SMTP credentials
+   - For Gmail, use app-specific password
+   - In development, emails log to console
 
-**Permission errors:**
-- Ensure upload directory is writable
-- Check file permissions
+4. **"Invalid token" errors**
+   - Check SECRET_KEY hasn't changed
+   - Verify token hasn't expired
+   - Clear cookies and re-login
 
-### Logs
+## 📝 API Documentation
 
-Logs are written to console by default. For production, configure proper logging:
+When running in development, access interactive API docs:
+- Swagger UI: http://localhost:8000/api/docs
+- ReDoc: http://localhost:8000/api/redoc
 
-```python
-import logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('app.log'),
-        logging.StreamHandler()
-    ]
-)
-```
+## 🤝 Contributing
 
-## Performance Optimization
-
-### For Production
-
-1. **Use multiple workers:**
-   ```bash
-   uvicorn main:app --workers 4
-   ```
-
-2. **Enable caching:**
-   - Redis for session storage
-   - File system caching for processed videos
-
-3. **Database optimization:**
-   - Use PostgreSQL for metadata storage
-   - Index frequently queried fields
-
-4. **File storage:**
-   - Use cloud storage (S3, GCS) for large files
-   - Implement CDN for video delivery
-
-## API Rate Limits
-
-- **OpenAI**: 60 requests/minute, 90k tokens/minute
-- **Gemini**: 60 requests/minute, 32k tokens/minute
-- **LM Studio**: 1000 requests/minute (local)
-
-## Contributing
-
-1. Fork the repository
-2. Create feature branch
-3. Make changes with tests
-4. Run code formatting
+1. Create feature branch
+2. Add tests for new features
+3. Ensure all tests pass
+4. Update documentation
 5. Submit pull request
 
-## License
+## 📄 License
 
-MIT License - see LICENSE file for details.
+MIT License - see LICENSE file
+
+## 🆘 Support
+
+- Documentation: [docs.openclippro.com](https://docs.openclippro.com)
+- Issues: [GitHub Issues](https://github.com/openclippro/issues)
+- Discord: [Join our community](https://discord.gg/openclippro)
+
+---
+
+Built with ❤️ using FastAPI, SQLAlchemy, and modern Python

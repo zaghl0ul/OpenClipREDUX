@@ -1,5 +1,6 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Depends
+from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
@@ -16,14 +17,17 @@ import sys
 
 # Import our modules
 from models.project import Project as ProjectSchema, Clip as ClipSchema, AnalysisRequest
-from models.database import Project, Clip, Setting
-from models.repositories import ProjectRepository, ClipRepository, SettingsRepository
+from models.database import Project, Clip, Setting, User
+from models.repositories import ProjectRepository, ClipRepository, SettingsRepository, UserRepository, AuditLogRepository
 from services.video_processor import VideoProcessor
 from services.ai_analyzer import AIAnalyzer
 from services.api_manager import APIManager
 from utils.security import SecurityManager
 from utils.file_manager import FileManager
 from utils.db_manager import get_db, init_db
+from auth.auth_handler import auth_handler
+from auth import auth_routes
+from config import settings
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -32,18 +36,30 @@ logger = logging.getLogger(__name__)
 # Initialize FastAPI app
 app = FastAPI(
     title="OpenClip Pro API",
-    description="AI-powered video clipping backend",
-    version="1.0.0"
+    description="AI-powered video clipping backend with enterprise security",
+    version="1.0.0",
+    docs_url="/api/docs" if settings.DEBUG else None,
+    redoc_url="/api/redoc" if settings.DEBUG else None
 )
 
-# CORS middleware
+# Security middleware
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=["*"] if settings.DEBUG else ["openclippro.com", "*.openclippro.com"]
+)
+
+# CORS middleware with security
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173", "http://localhost:5174", "http://localhost:5175"],  # React dev server and Vite dev server
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=settings.CORS_ALLOW_CREDENTIALS,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["X-Total-Count", "X-Page", "X-Per-Page"]
 )
+
+# Include authentication routes
+app.include_router(auth_routes.router)
 
 # Initialize services
 video_processor = VideoProcessor()
@@ -52,12 +68,70 @@ api_manager = APIManager()
 security_manager = SecurityManager()
 file_manager = FileManager()
 
+# Audit logging middleware
+@app.middleware("http")
+async def audit_log_middleware(request: Request, call_next):
+    """Log all API requests for security auditing"""
+    start_time = datetime.utcnow()
+    
+    # Get user from JWT if present
+    user_id = None
+    try:
+        if "Authorization" in request.headers:
+            token = request.headers["Authorization"].replace("Bearer ", "")
+            payload = auth_handler.decode_token(token)
+            user_id = payload.get("user_id")
+    except:
+        pass
+    
+    # Process request
+    response = await call_next(request)
+    
+    # Log request (skip health checks and docs)
+    if not request.url.path.startswith(("/health", "/api/docs", "/api/redoc")):
+        process_time = (datetime.utcnow() - start_time).total_seconds()
+        
+        # Create audit log asynchronously
+        try:
+            db = next(get_db())
+            AuditLogRepository.create_log(db, {
+                "user_id": user_id,
+                "action": f"{request.method} {request.url.path}",
+                "ip_address": request.client.host if request.client else None,
+                "user_agent": request.headers.get("User-Agent"),
+                "request_method": request.method,
+                "request_path": request.url.path,
+                "details": {
+                    "status_code": response.status_code,
+                    "process_time": process_time
+                }
+            })
+        except:
+            pass
+    
+    return response
+
 # Initialize database
 @app.on_event("startup")
 async def startup_db_client():
     try:
         init_db()
         logger.info("Database initialized successfully")
+        
+        # Create default admin user if none exists
+        db = next(get_db())
+        admin = UserRepository.get_user_by_email(db, "admin@openclippro.com")
+        if not admin and settings.ENVIRONMENT == "development":
+            admin = UserRepository.create_user(db, {
+                "email": "admin@openclippro.com",
+                "full_name": "Admin User",
+                "hashed_password": auth_handler.get_password_hash("admin123!"),
+                "is_active": True,
+                "is_verified": True,
+                "roles": ["user", "admin"]
+            })
+            logger.info("Created default admin user")
+            
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
 
@@ -83,50 +157,24 @@ class APITestRequest(BaseModel):
     provider: str
     api_key: str
 
-# YouTube URL request model
 class YouTubeURLRequest(BaseModel):
     youtube_url: str
 
-# Health check
+# Health check (public endpoint)
 @app.get("/health")
 async def health_check(db: Session = Depends(get_db)):
     """
     Check the health status of the backend service and its dependencies
-    
-    Returns detailed diagnostics about the backend services
     """
     try:
         # Test database connection
         db_status = "connected"
         db_error = None
         try:
-            # Simple query to test if DB is working
             setting = db.query(Setting).first()
         except Exception as e:
             db_status = "error"
             db_error = str(e)
-        
-        # Check AI services
-        ai_services = {}
-        for provider_info in api_manager.get_providers():
-            provider_id = provider_info["id"]
-            ai_services[provider_id] = {
-                "available": True,
-                "models_count": len(api_manager.get_provider_models(provider_id)),
-                "name": provider_info["name"]
-            }
-        
-        # Check file system access
-        fs_status = "ok"
-        fs_error = None
-        try:
-            test_file = os.path.join(file_manager.get_temp_dir(), "health_check.txt")
-            with open(test_file, "w") as f:
-                f.write("test")
-            os.remove(test_file)
-        except Exception as e:
-            fs_status = "error"
-            fs_error = str(e)
         
         return {
             "status": "healthy",
@@ -134,20 +182,12 @@ async def health_check(db: Session = Depends(get_db)):
             "version": "1.0.0",
             "environment": {
                 "python": sys.version,
-                "platform": platform.platform(),
-                "processor": platform.processor()
+                "platform": platform.platform()
             },
             "database": {
                 "status": db_status,
                 "error": db_error
-            },
-            "file_system": {
-                "status": fs_status,
-                "error": fs_error,
-                "temp_dir": file_manager.get_temp_dir(),
-                "uploads_dir": file_manager.get_uploads_dir()
-            },
-            "ai_services": ai_services
+            }
         }
     except Exception as e:
         logger.error(f"Health check failed: {e}")
@@ -157,114 +197,99 @@ async def health_check(db: Session = Depends(get_db)):
             "error": str(e)
         }
 
-# API Management endpoints
+# Protected endpoints - require authentication
 @app.get("/api/providers")
-async def get_providers():
+async def get_providers(current_user: User = Depends(auth_handler.get_current_user)):
     """Get all available AI providers"""
     try:
         providers = api_manager.get_providers()
         return {"providers": providers}
     except Exception as e:
         logger.error(f"Error getting providers: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": "Failed to get providers"}
-        )
+        raise HTTPException(status_code=500, detail="Failed to get providers")
 
 @app.get("/api/models/{provider}")
-async def get_available_models(provider: str, db: Session = Depends(get_db)):
+async def get_available_models(
+    provider: str, 
+    current_user: User = Depends(auth_handler.get_current_user),
+    db: Session = Depends(get_db)
+):
     """Get available models for a provider"""
     try:
-        # Get API key securely
-        api_key = security_manager.get_api_key(provider, db, SettingsRepository)
-        if not api_key:
-            raise HTTPException(status_code=400, detail=f"No API key configured for {provider}")
+        # Get user's API key for the provider
+        api_key_setting = SettingsRepository.get_setting(
+            db, "api_keys", f"{provider}_key_{current_user.id}"
+        )
         
+        if not api_key_setting:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"No API key configured for {provider}"
+            )
+        
+        api_key = security_manager.decrypt_value(api_key_setting.value)
         models = await api_manager.get_available_models(provider, api_key, db, security_manager, SettingsRepository)
+        
         return {"models": models}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error getting models: {e}")
         raise HTTPException(status_code=500, detail="Failed to get models")
 
-@app.post("/api/settings/test-api")
-async def test_api_connection(request: APITestRequest):
-    """Test API connection"""
-    try:
-        result = await api_manager.test_connection(request.provider, request.api_key)
-        return {"success": result["success"], "message": result["message"]}
-    except Exception as e:
-        logger.error(f"Error testing API: {e}")
-        return {"success": False, "message": str(e)}
-
-# Settings endpoints
-@app.get("/api/settings")
-async def get_settings(db: Session = Depends(get_db)):
-    """Get user settings"""
-    try:
-        # Get settings from the database
-        model_settings = {}
-        app_settings = {}
-        
-        # Get model settings
-        for setting in SettingsRepository.get_settings_by_category(db, "model_settings"):
-            model_settings[setting.key] = setting.value
-            
-        # Get app settings
-        for setting in SettingsRepository.get_settings_by_category(db, "app_settings"):
-            app_settings[setting.key] = setting.value
-            
-        return {
-            "model_settings": model_settings,
-            "app_settings": app_settings
-        }
-    except Exception as e:
-        logger.error(f"Error getting settings: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": "Failed to get settings"}
-        )
-
-@app.post("/api/settings")
-async def update_settings(request: SettingsUpdateRequest, db: Session = Depends(get_db)):
-    """Update user settings"""
-    try:
-        # Update setting in database
-        setting = SettingsRepository.create_or_update_setting(
-            db, request.category, request.key, request.value
-        )
-        
-        return {"success": True, "message": "Settings updated successfully"}
-    except Exception as e:
-        logger.error(f"Error updating settings: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": "Failed to update settings"}
-        )
-
-# Projects endpoints
+# Projects endpoints with user ownership
 @app.get("/api/projects")
-async def get_projects(db: Session = Depends(get_db)):
-    """Get all projects"""
+async def get_projects(
+    current_user: User = Depends(auth_handler.get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all projects for current user"""
     try:
-        projects = ProjectRepository.get_all_projects(db)
+        projects = db.query(Project).filter(
+            Project.user_id == current_user.id
+        ).order_by(Project.created_at.desc()).all()
+        
         return {"projects": [project.to_dict() for project in projects]}
     except Exception as e:
         logger.error(f"Error getting projects: {e}")
         raise HTTPException(status_code=500, detail="Failed to get projects")
 
 @app.get("/api/projects/{project_id}")
-async def get_project(project_id: str, db: Session = Depends(get_db)):
+async def get_project(
+    project_id: str,
+    current_user: User = Depends(auth_handler.get_current_user),
+    db: Session = Depends(get_db)
+):
     """Get a specific project"""
-    project = ProjectRepository.get_project_by_id(db, project_id)
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == current_user.id
+    ).first()
+    
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     
     return {"project": project.to_dict()}
 
 @app.post("/api/projects")
-async def create_project(request: ProjectCreateRequest, db: Session = Depends(get_db)):
+async def create_project(
+    request: ProjectCreateRequest,
+    current_user: User = Depends(auth_handler.get_current_user),
+    db: Session = Depends(get_db)
+):
     """Create a new project"""
     try:
+        # Check user limits
+        project_count = db.query(Project).filter(
+            Project.user_id == current_user.id
+        ).count()
+        
+        if project_count >= settings.FREE_TIER_PROJECTS and "pro" not in current_user.roles:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Free tier limited to {settings.FREE_TIER_PROJECTS} projects. Please upgrade."
+            )
+        
         project_data = {
             "id": str(uuid.uuid4()),
             "name": request.name,
@@ -272,50 +297,96 @@ async def create_project(request: ProjectCreateRequest, db: Session = Depends(ge
             "type": request.type,
             "youtube_url": request.youtube_url,
             "status": "created",
+            "user_id": current_user.id,
             "analysis_prompt": ""
         }
         
         project = ProjectRepository.create_project(db, project_data)
-        logger.info(f"Created project: {project.id}")
+        logger.info(f"Created project: {project.id} for user: {current_user.email}")
         
         return {"project": project.to_dict()}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error creating project: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to create project: {str(e)}")
 
 @app.delete("/api/projects/{project_id}")
-async def delete_project(project_id: str, db: Session = Depends(get_db)):
+async def delete_project(
+    project_id: str,
+    current_user: User = Depends(auth_handler.get_current_user),
+    db: Session = Depends(get_db)
+):
     """Delete a project"""
-    project = ProjectRepository.get_project_by_id(db, project_id)
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == current_user.id
+    ).first()
+    
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     
     try:
-        # Delete project from database
+        # Update user storage
+        if project.file_size:
+            UserRepository.update_storage_used(db, current_user.id, -project.file_size)
+        
+        # Delete project
         success = ProjectRepository.delete_project(db, project_id)
         if not success:
             raise HTTPException(status_code=500, detail="Failed to delete project")
         
-        # Clean up associated files
+        # Clean up files
         file_manager.cleanup_project_files(project_id)
         
+        logger.info(f"Deleted project: {project_id} for user: {current_user.email}")
+        
         return {"success": True, "message": "Project deleted successfully"}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error deleting project {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to delete project: {str(e)}")
 
-# Video upload endpoint
+# Video upload with size limits
 @app.post("/api/projects/{project_id}/upload")
-async def upload_video(project_id: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def upload_video(
+    project_id: str,
+    file: UploadFile = File(...),
+    current_user: User = Depends(auth_handler.get_current_user),
+    db: Session = Depends(get_db)
+):
     """Upload video file for a project"""
-    project = ProjectRepository.get_project_by_id(db, project_id)
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == current_user.id
+    ).first()
+    
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     
     try:
-        # Validate file type
+        # Check file type
         if not file.content_type.startswith('video/'):
             raise HTTPException(status_code=400, detail="File must be a video")
+        
+        # Check file size
+        if file.size > settings.MAX_UPLOAD_SIZE:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large. Maximum size is {settings.MAX_UPLOAD_SIZE // (1024**3)}GB"
+            )
+        
+        # Check user storage limits
+        storage_limit = settings.FREE_TIER_STORAGE_GB * 1024 * 1024 * 1024
+        if "pro" in current_user.roles:
+            storage_limit *= 10  # Pro users get 10x storage
+            
+        if current_user.storage_used + file.size > storage_limit:
+            raise HTTPException(
+                status_code=413,
+                detail="Storage limit exceeded. Please upgrade or delete old projects."
+            )
         
         # Save file
         file_path = await file_manager.save_upload(file, project_id)
@@ -323,7 +394,7 @@ async def upload_video(project_id: str, file: UploadFile = File(...), db: Sessio
         # Process video metadata
         video_data = await video_processor.extract_metadata(file_path)
         
-        # Update project
+        # Update project and user storage
         updates = {
             "video_data": {
                 "file_path": file_path,
@@ -333,58 +404,43 @@ async def upload_video(project_id: str, file: UploadFile = File(...), db: Sessio
                 "resolution": video_data.get('resolution'),
                 "fps": video_data.get('fps')
             },
+            "file_size": file.size,
             "status": "uploaded"
         }
         
         updated_project = ProjectRepository.update_project(db, project_id, updates)
+        UserRepository.update_storage_used(db, current_user.id, file.size)
         
         logger.info(f"Video uploaded for project: {project_id}")
         
         return {"project": updated_project.to_dict()}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error uploading video: {e}")
         raise HTTPException(status_code=500, detail="Failed to upload video")
 
-# YouTube processing endpoint
-@app.post("/api/projects/{project_id}/youtube")
-async def process_youtube(project_id: str, request: YouTubeURLRequest, db: Session = Depends(get_db)):
-    """Process YouTube URL for a project"""
-    project = ProjectRepository.get_project_by_id(db, project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    
-    if not request.youtube_url:
-        raise HTTPException(status_code=400, detail="No YouTube URL provided")
-    
-    try:
-        # Update project with the YouTube URL first
-        ProjectRepository.update_project(db, project_id, {"youtube_url": request.youtube_url, "status": "processing"})
-        
-        # Download and process YouTube video
-        video_data = await video_processor.process_youtube_url(request.youtube_url)
-        
-        # Update project
-        updates = {
-            "video_data": video_data,
-            "status": "uploaded"
-        }
-        
-        updated_project = ProjectRepository.update_project(db, project_id, updates)
-        
-        logger.info(f"YouTube video processed for project: {project_id}")
-        
-        return {"project": updated_project.to_dict()}
-    except Exception as e:
-        logger.error(f"Error processing YouTube video: {e}")
-        # Update project status to error
-        ProjectRepository.update_project(db, project_id, {"status": "error"})
-        raise HTTPException(status_code=500, detail=f"Failed to process YouTube video: {str(e)}")
-
-# Analysis endpoints
+# Analysis with rate limiting
 @app.post("/api/projects/{project_id}/analyze")
-async def analyze_video(project_id: str, request: AnalysisPromptRequest, db: Session = Depends(get_db)):
+async def analyze_video(
+    project_id: str,
+    request: AnalysisPromptRequest,
+    current_user: User = Depends(auth_handler.get_current_user),
+    db: Session = Depends(get_db)
+):
     """Start AI analysis of the video"""
-    project = ProjectRepository.get_project_by_id(db, project_id)
+    # Check API call limits
+    if current_user.api_calls_count >= settings.FREE_TIER_API_CALLS and "pro" not in current_user.roles:
+        raise HTTPException(
+            status_code=429,
+            detail=f"API call limit reached ({settings.FREE_TIER_API_CALLS} calls). Please upgrade."
+        )
+    
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == current_user.id
+    ).first()
+    
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     
@@ -395,191 +451,178 @@ async def analyze_video(project_id: str, request: AnalysisPromptRequest, db: Ses
         # Update project with analysis prompt
         updates = {
             "analysis_prompt": request.prompt,
-            "status": "analyzing"
+            "status": "analyzing",
+            "analysis_provider": request.provider,
+            "analysis_model": request.model
         }
         updated_project = ProjectRepository.update_project(db, project_id, updates)
         
-        # Get API settings
-        provider_setting = SettingsRepository.get_setting(db, "model_settings", "default_provider")
-        provider = request.provider or (provider_setting.value if provider_setting else "openai")
+        # Get API key for provider
+        provider = request.provider or "openai"
+        api_key_setting = SettingsRepository.get_setting(
+            db, "api_keys", f"{provider}_key_{current_user.id}"
+        )
         
-        # Get API key securely
-        api_key = security_manager.get_api_key(provider, db, SettingsRepository)
+        if not api_key_setting:
+            raise HTTPException(
+                status_code=400,
+                detail=f"No API key configured for {provider}"
+            )
         
-        if not api_key:
-            raise HTTPException(status_code=400, detail=f"No API key configured for {provider}")
+        api_key = security_manager.decrypt_value(api_key_setting.value)
         
-        # For demo, we'll simulate the analysis
-        clips = await simulate_analysis(updated_project, request.prompt)
+        # Start analysis (this would be async in production)
+        video_path = updated_project.video_data.get("file_path")
+        clips_data = await ai_analyzer.analyze_video(
+            video_path,
+            request.prompt,
+            provider,
+            api_key
+        )
         
         # Create clips in database
-        for clip_data in clips:
+        for clip_data in clips_data:
             clip_dict = {
                 "project_id": project_id,
-                "title": clip_data.title,
-                "description": clip_data.explanation,
-                "start_time": clip_data.start_time,
-                "end_time": clip_data.end_time,
+                "title": clip_data.get("title"),
+                "description": clip_data.get("explanation"),
+                "start_time": clip_data.get("start_time"),
+                "end_time": clip_data.get("end_time"),
+                "duration": clip_data.get("end_time") - clip_data.get("start_time"),
+                "score": clip_data.get("score"),
+                "analysis_reason": clip_data.get("explanation"),
                 "tags": []
             }
             ClipRepository.create_clip(db, clip_dict)
         
-        # Update project status
+        # Update project status and user API calls
         ProjectRepository.update_project(db, project_id, {"status": "completed"})
+        UserRepository.increment_api_calls(db, current_user.id)
         
         # Get updated project with clips
         final_project = ProjectRepository.get_project_by_id(db, project_id)
         logger.info(f"Analysis completed for project: {project_id}")
         
         return {"project": final_project.to_dict()}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error analyzing video: {e}")
-        ProjectRepository.update_project(db, project_id, {"status": "error"})
+        ProjectRepository.update_project(db, project_id, {"status": "error", "error_message": str(e)})
         raise HTTPException(status_code=500, detail=f"Failed to analyze video: {str(e)}")
 
-async def simulate_analysis(project: Project, prompt: str) -> List[Clip]:
-    """Simulate AI analysis for demo purposes"""
-    # Simulate processing time
-    await asyncio.sleep(2)
-    
-    # Generate mock clips based on prompt
-    clips = []
-    clip_types = {
-        "funny": [("Hilarious reaction", 85), ("Comedy gold moment", 92), ("Unexpected humor", 78)],
-        "engaging": [("Hook moment", 88), ("Peak engagement", 94), ("Attention grabber", 82)],
-        "educational": [("Key insight", 90), ("Learning moment", 87), ("Important concept", 85)],
-        "emotional": [("Touching moment", 89), ("Emotional peak", 93), ("Heartfelt scene", 86)]
-    }
-    
-    # Determine clip type based on prompt
-    clip_type = "engaging"  # default
-    for key in clip_types.keys():
-        if key in prompt.lower():
-            clip_type = key
-            break
-    
-    selected_clips = clip_types[clip_type]
-    
-    for i, (title, score) in enumerate(selected_clips):
-        clip = Clip(
-            id=str(uuid.uuid4()),
-            title=title,
-            start_time=i * 30,  # 30 second intervals
-            end_time=(i * 30) + 15,  # 15 second clips
-            score=score,
-            explanation=f"This clip shows {title.lower()} based on the analysis criteria: {prompt}",
-            created_at=datetime.now().isoformat()
-        )
-        clips.append(clip)
-    
-    return clips
-
-# Clip management endpoints
-@app.put("/api/projects/{project_id}/clips/{clip_id}")
-async def update_clip(project_id: str, clip_id: str, clip_data: dict, db: Session = Depends(get_db)):
-    """Update a clip"""
-    project = ProjectRepository.get_project_by_id(db, project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    
-    clip = ClipRepository.get_clip_by_id(db, clip_id)
-    if not clip or clip.project_id != project_id:
-        raise HTTPException(status_code=404, detail="Clip not found")
-    
+# Settings endpoints with user context
+@app.get("/api/settings")
+async def get_settings(
+    current_user: User = Depends(auth_handler.get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get user settings"""
     try:
-        # Update clip data
-        updated_clip = ClipRepository.update_clip(db, clip_id, clip_data)
+        settings_dict = {
+            "model_settings": {},
+            "app_settings": {},
+            "usage": {
+                "storage_used": current_user.storage_used,
+                "storage_limit": settings.FREE_TIER_STORAGE_GB * 1024 * 1024 * 1024,
+                "api_calls": current_user.api_calls_count,
+                "api_limit": settings.FREE_TIER_API_CALLS,
+                "projects_count": db.query(Project).filter(Project.user_id == current_user.id).count(),
+                "projects_limit": settings.FREE_TIER_PROJECTS
+            }
+        }
         
-        logger.info(f"Updated clip: {clip_id} in project: {project_id}")
+        # Get user-specific settings
+        user_settings = db.query(Setting).filter(Setting.user_id == current_user.id).all()
         
-        return {"clip": updated_clip.to_dict()}
+        for setting in user_settings:
+            if setting.category == "model_settings":
+                settings_dict["model_settings"][setting.key] = setting.value
+            elif setting.category == "app_settings":
+                settings_dict["app_settings"][setting.key] = setting.value
+        
+        return settings_dict
     except Exception as e:
-        logger.error(f"Error updating clip: {e}")
-        raise HTTPException(status_code=500, detail="Failed to update clip")
+        logger.error(f"Error getting settings: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get settings")
 
-@app.delete("/api/projects/{project_id}/clips/{clip_id}")
-async def delete_clip(project_id: str, clip_id: str, db: Session = Depends(get_db)):
-    """Delete a clip"""
-    project = ProjectRepository.get_project_by_id(db, project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    
-    clip = ClipRepository.get_clip_by_id(db, clip_id)
-    if not clip or clip.project_id != project_id:
-        raise HTTPException(status_code=404, detail="Clip not found")
-    
-    try:
-        success = ClipRepository.delete_clip(db, clip_id)
-        if not success:
-            raise HTTPException(status_code=500, detail="Failed to delete clip")
-            
-        logger.info(f"Deleted clip: {clip_id} from project: {project_id}")
-        
-        return {"message": "Clip deleted successfully"}
-    except Exception as e:
-        logger.error(f"Error deleting clip: {e}")
-        raise HTTPException(status_code=500, detail="Failed to delete clip")
-
-# Export endpoint
-@app.post("/api/projects/{project_id}/export")
-async def export_clips(project_id: str, export_settings: dict, db: Session = Depends(get_db)):
-    """Export clips from a project"""
-    project = ProjectRepository.get_project_by_id(db, project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    
-    clips = ClipRepository.get_clips_by_project(db, project_id)
-    if not clips:
-        raise HTTPException(status_code=400, detail="No clips to export")
-    
-    try:
-        # Process export (this would be async in production)
-        video_path = project.video_data.get("file_path") if project.video_data else None
-        if not video_path:
-            raise HTTPException(status_code=400, detail="No video file available")
-            
-        export_result = await video_processor.export_clips(
-            video_path,
-            [clip.to_dict() for clip in clips],
-            export_settings
-        )
-        
-        logger.info(f"Exported clips for project: {project_id}")
-        
-        return {"export_result": export_result}
-    except Exception as e:
-        logger.error(f"Error exporting clips: {e}")
-        raise HTTPException(status_code=500, detail="Failed to export clips")
-
-# API Key management endpoint
 @app.post("/api/settings/api-key")
-async def set_api_key(request: APITestRequest, db: Session = Depends(get_db)):
-    """Securely store an API key"""
+async def set_api_key(
+    request: APITestRequest,
+    current_user: User = Depends(auth_handler.get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Securely store an API key for current user"""
     try:
-        # Validate the API key first
+        # Test the API key first
         validation_result = await api_manager.test_connection(request.provider, request.api_key)
         
         if not validation_result.get("success", False):
-            return JSONResponse(
+            raise HTTPException(
                 status_code=400,
-                content={"error": f"Invalid API key for {request.provider}"}
+                detail=f"Invalid API key for {request.provider}"
             )
         
-        # Store the key securely
-        security_manager.store_api_key(
-            request.provider, 
-            request.api_key, 
-            db_session=db, 
-            settings_repo=SettingsRepository
+        # Encrypt and store the key
+        encrypted_key = security_manager.encrypt_value(request.api_key)
+        
+        SettingsRepository.create_or_update_setting(
+            db,
+            "api_keys",
+            f"{request.provider}_key_{current_user.id}",
+            encrypted_key
         )
         
+        logger.info(f"API key stored for {request.provider} by user {current_user.email}")
+        
         return {"success": True, "message": f"API key for {request.provider} stored successfully"}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error storing API key: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": "Failed to store API key"}
-        )
+        raise HTTPException(status_code=500, detail="Failed to store API key")
+
+# Admin endpoints
+@app.get("/api/admin/stats", dependencies=[Depends(auth_handler.require_roles(["admin"]))])
+async def get_admin_stats(db: Session = Depends(get_db)):
+    """Get system statistics (admin only)"""
+    try:
+        total_users = db.query(User).count()
+        active_users = db.query(User).filter(User.is_active == True).count()
+        total_projects = db.query(Project).count()
+        total_clips = db.query(Clip).count()
+        
+        return {
+            "users": {
+                "total": total_users,
+                "active": active_users
+            },
+            "projects": {
+                "total": total_projects
+            },
+            "clips": {
+                "total": total_clips
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error getting admin stats: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get statistics")
+
+# Error handlers
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail}
+    )
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled exception: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"}
+    )
 
 if __name__ == "__main__":
     uvicorn.run(
